@@ -1,0 +1,5 @@
+{
+  "name": "Name Verifier Pro",
+  "description": "Upload a list of names to automatically correct spellings, verify identities, and group duplicates using Google Search and Gemini.",
+  "requestFramePermissions": []
+}
