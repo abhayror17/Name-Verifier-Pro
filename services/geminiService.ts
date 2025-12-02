@@ -86,55 +86,73 @@ export const verifyNames = async (
       const text = response.text || '';
       let newEntries: any[] = [];
       
-      // Extract JSON
+      // Robust JSON Extraction
+      // 1. Try to find markdown code block
       const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
       if (jsonMatch && jsonMatch[1]) {
         try {
           newEntries = JSON.parse(jsonMatch[1]);
         } catch (e) {
-          console.error(`Failed to parse JSON from batch ${i + 1}`, e);
+          console.warn(`Failed to parse JSON from markdown block in batch ${i + 1}`);
         }
-      } else {
-         try {
-            newEntries = JSON.parse(text);
-         } catch (e) {
-             console.error(`No JSON code block found in batch ${i + 1}`);
-         }
+      } 
+      
+      // 2. If Markdown failed, try to find the array brackets directly
+      if (newEntries.length === 0) {
+        const start = text.indexOf('[');
+        const end = text.lastIndexOf(']');
+        if (start !== -1 && end !== -1 && end > start) {
+          try {
+            const rawJson = text.substring(start, end + 1);
+            newEntries = JSON.parse(rawJson);
+          } catch (e) {
+             console.error(`Failed to parse raw JSON from batch ${i + 1}`, e);
+          }
+        } else {
+             console.warn(`No JSON structure found in batch ${i + 1}`);
+        }
       }
 
       // Process and merge new entries immediately
-      newEntries.forEach((item, index) => {
-        // Normalize key
-        const key = item.correctName ? item.correctName.trim().toUpperCase() : `UNKNOWN-${Date.now()}`;
-        
-        if (!item.correctName) return; 
+      if (Array.isArray(newEntries)) {
+        newEntries.forEach((item, index) => {
+          // Normalize key
+          const key = item.correctName ? item.correctName.trim().toUpperCase() : `UNKNOWN-${Date.now()}-${index}`;
+          
+          if (!item.correctName) return; 
 
-        const entry: ProcessedNameEntry = {
-            id: `entry-${i}-${index}-${Date.now()}`,
-            correctName: item.correctName,
-            originalVariations: item.originalVariations || [],
-            description: item.description,
-            isVerified: item.isVerified
-        };
+          const entry: ProcessedNameEntry = {
+              id: `entry-${i}-${index}-${Date.now()}`,
+              correctName: item.correctName,
+              originalVariations: Array.isArray(item.originalVariations) ? item.originalVariations : [],
+              description: item.description || '',
+              isVerified: !!item.isVerified
+          };
 
-        const existing = mergedEntriesMap.get(key);
-        if (existing) {
-          // Merge
-          existing.originalVariations = Array.from(new Set([
-            ...existing.originalVariations,
-            ...entry.originalVariations
-          ]));
-          existing.isVerified = existing.isVerified || entry.isVerified;
-          if (!existing.description && entry.description) {
-            existing.description = entry.description;
+          const existing = mergedEntriesMap.get(key);
+          if (existing) {
+            // Merge
+            existing.originalVariations = Array.from(new Set([
+              ...existing.originalVariations,
+              ...entry.originalVariations
+            ]));
+            // Update metadata if the new entry is verified and existing wasn't
+            if (!existing.isVerified && entry.isVerified) {
+                existing.isVerified = true;
+            }
+            if ((!existing.description || existing.description === 'Unverified') && entry.description) {
+              existing.description = entry.description;
+            }
+          } else {
+            mergedEntriesMap.set(key, entry);
           }
-        } else {
-          mergedEntriesMap.set(key, entry);
-        }
-      });
+        });
+      }
 
-      // Extract Grounding Metadata
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      // Extract Grounding Metadata safely
+      const candidate = response.candidates?.[0];
+      const groundingChunks = candidate?.groundingMetadata?.groundingChunks || [];
+      
       groundingChunks.forEach((chunk: any) => {
         if (chunk.web) {
           const uri = chunk.web.uri;
